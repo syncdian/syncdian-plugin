@@ -2,7 +2,7 @@ import { Notice, Platform, normalizePath, type App } from "obsidian";
 import { SyncClient, SyncError } from "./client";
 import { sha256 } from "./crypto";
 import { isTextPath, mergeText } from "./merge";
-import { androidSafePath } from "./paths";
+import { androidSafePath, isMissingFileError } from "./paths";
 import type { PluginData, RemoteFile, SyncedFile, VaultSyncState } from "./types";
 
 interface EngineOptions {
@@ -182,7 +182,11 @@ export class SyncEngine {
     const state = this.options.state();
     const actualPaths = new Set(await this.listLocalFiles());
     for (const path of actualPaths) {
-      const data = await this.options.app.vault.adapter.readBinary(path);
+      const data = await this.readLocal(path);
+      if (!data) {
+        actualPaths.delete(path);
+        continue;
+      }
       const plainHash = await sha256(data);
       const synced = state.files[path];
       if (!synced || synced.deleted || synced.plainHash !== plainHash) this.pendingPaths.add(path);
@@ -217,13 +221,13 @@ export class SyncEngine {
     }
 
     for (const path of Array.from(this.pendingPaths).sort()) {
-      if (!await this.options.app.vault.adapter.exists(path)) {
+      const data = await this.readLocal(path);
+      if (!data) {
         this.pendingPaths.delete(path);
         this.pendingDeletes.add(path);
         continue;
       }
       const state = this.options.state();
-      const data = await this.options.app.vault.adapter.readBinary(path);
       const plainHash = await sha256(data);
       const synced = state.files[path];
       if (synced && !synced.deleted && synced.plainHash === plainHash) {
@@ -233,8 +237,12 @@ export class SyncEngine {
       try {
         await this.uploadData(path, data, synced?.version ?? 0);
         this.pendingPaths.delete(path);
-        const latest = await this.options.app.vault.adapter.readBinary(path);
-        if (await sha256(latest) !== plainHash) this.pendingPaths.add(path);
+        const latest = await this.readLocal(path);
+        if (latest && await sha256(latest) !== plainHash) {
+          this.pendingPaths.add(path);
+        } else if (!latest) {
+          this.pendingDeletes.add(path);
+        }
         await this.options.persist();
       } catch (caught) {
         if (caught instanceof SyncError && caught.status === 409 && caught.payload.current) {
@@ -268,8 +276,8 @@ export class SyncEngine {
     if (synced?.revision === remote.revision && synced.hash === remote.hash) return;
 
     const adapter = this.options.app.vault.adapter;
-    const exists = await adapter.exists(path);
-    const localData = exists ? await adapter.readBinary(path) : null;
+    const localData = await this.readLocal(path);
+    const exists = localData !== null;
     const localHash = localData ? await sha256(localData) : null;
 
     if (remote.deleted) {
@@ -335,6 +343,15 @@ export class SyncEngine {
     new Notice(`Syncdian: local binary version preserved as ${candidate}`, 8000);
   }
 
+  private async readLocal(path: string): Promise<ArrayBuffer | null> {
+    try {
+      return await this.options.app.vault.adapter.readBinary(path);
+    } catch (caught) {
+      if (isMissingFileError(caught)) return null;
+      throw caught;
+    }
+  }
+
   private async writeLocal(path: string, data: ArrayBuffer): Promise<void> {
     await this.ensureParentFolder(path);
     this.applyingRemote += 1;
@@ -349,6 +366,8 @@ export class SyncEngine {
     this.applyingRemote += 1;
     try {
       await this.options.app.vault.adapter.remove(path);
+    } catch (caught) {
+      if (!isMissingFileError(caught)) throw caught;
     } finally {
       this.applyingRemote -= 1;
     }
