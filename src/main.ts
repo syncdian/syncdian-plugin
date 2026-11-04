@@ -275,7 +275,7 @@ class SyncdianSettingTab extends PluginSettingTab {
         .addButton((button) => button.setButtonText("Need more storage").onClick(() => {
           const subject = encodeURIComponent("Syncdian storage upgrade");
           const body = encodeURIComponent(`Hi Vayazka,\n\nI need more Syncdian storage.\nGitHub: @${this.plugin.data.user?.login ?? "unknown"}\nUsage: ${formatBytes(plan.usedBytes)} of ${formatBytes(plan.storageQuotaBytes)}\n`);
-          window.open(`mailto:helo@vayazka.com?subject=${subject}&body=${body}`, "_blank");
+          window.open(`mailto:halo@syncdian.com?subject=${subject}&body=${body}`, "_blank");
         }));
     }
 

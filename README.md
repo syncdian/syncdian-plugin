@@ -33,7 +33,7 @@ Vault limits and storage quotas are configured per user in D1.
 
 ## Storage upgrades
 
-Open **Settings → Syncdian** to see current usage. Choose **Need more storage** to draft an email to `helo@vayazka.com` with your GitHub account and usage.
+Open **Settings → Syncdian** to see current usage. Choose **Need more storage** to draft an email to `halo@syncdian.com` with your GitHub account and usage.
 
 ## Features
 

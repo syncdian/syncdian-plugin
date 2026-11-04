@@ -1148,7 +1148,7 @@ I need more Syncdian storage.
 GitHub: @${this.plugin.data.user?.login ?? "unknown"}
 Usage: ${formatBytes(plan.usedBytes)} of ${formatBytes(plan.storageQuotaBytes)}
 `);
-        window.open(`mailto:helo@vayazka.com?subject=${subject}&body=${body}`, "_blank");
+        window.open(`mailto:halo@syncdian.com?subject=${subject}&body=${body}`, "_blank");
       }));
     }
     new import_obsidian3.Setting(containerEl).setName("Automatic sync").addToggle((toggle) => toggle.setValue(this.plugin.data.autoSync).onChange((value) => {
