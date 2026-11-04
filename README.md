@@ -2,13 +2,13 @@
 
 Automatic Obsidian synchronization for macOS, iOS, and Android. Sync notes, attachments, settings, themes, snippets, and other community plugins using GitHub login and server-side encryption.
 
-This public repository contains **only the Obsidian plugin**. The Cloudflare backend is maintained privately at [vayazka/syncdian](https://github.com/vayazka/syncdian).
+This public repository contains **only the Obsidian plugin**. The Cloudflare backend is maintained privately at [syncdian/syncdian](https://github.com/syncdian/syncdian).
 
 ## Install with BRAT
 
 1. Install [BRAT](https://obsidian.md/plugins/obsidian42-brat) from Obsidian Community Plugins.
 2. Run **BRAT: Add a beta plugin for testing**.
-3. Enter `https://github.com/vayazka/syncdian-plugin`.
+3. Enter `https://github.com/syncdian/syncdian-plugin`.
 4. Enable **Syncdian** in Community Plugins.
 5. Open **Settings → Syncdian** and choose **Login with GitHub**.
 
