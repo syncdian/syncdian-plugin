@@ -274,7 +274,7 @@ class SyncdianSettingTab extends PluginSettingTab {
       new Setting(containerEl).setName("Need more storage?").setDesc("Email us with your account and current usage.")
         .addButton((button) => button.setButtonText("Need more storage").onClick(() => {
           const subject = encodeURIComponent("Syncdian storage upgrade");
-          const body = encodeURIComponent(`Hi Vayazka,\n\nI need more Syncdian storage.\nGitHub: @${this.plugin.data.user?.login ?? "unknown"}\nUsage: ${formatBytes(plan.usedBytes)} of ${formatBytes(plan.storageQuotaBytes)}\n`);
+          const body = encodeURIComponent(`Hi Syncdian,\n\nI need more Syncdian storage.\nGitHub: @${this.plugin.data.user?.login ?? "unknown"}\nUsage: ${formatBytes(plan.usedBytes)} of ${formatBytes(plan.storageQuotaBytes)}\n`);
           window.open(`mailto:halo@syncdian.com?subject=${subject}&body=${body}`, "_blank");
         }));
     }

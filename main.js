@@ -43,7 +43,7 @@ async function sha256(data) {
 }
 
 // src/client.ts
-var API_URLS = ["https://api.syncdian.com", "https://syncdian.vayazka.com"];
+var API_URLS = ["https://api.syncdian.com", "https://syncdian.maslulsaefulloh.workers.dev"];
 var SyncError = class extends Error {
   constructor(message, status, payload) {
     super(message);
@@ -1142,7 +1142,7 @@ var SyncdianSettingTab = class extends import_obsidian3.PluginSettingTab {
       progress.style.width = "100%";
       new import_obsidian3.Setting(containerEl).setName("Need more storage?").setDesc("Email us with your account and current usage.").addButton((button) => button.setButtonText("Need more storage").onClick(() => {
         const subject = encodeURIComponent("Syncdian storage upgrade");
-        const body = encodeURIComponent(`Hi Vayazka,
+        const body = encodeURIComponent(`Hi Syncdian,
 
 I need more Syncdian storage.
 GitHub: @${this.plugin.data.user?.login ?? "unknown"}

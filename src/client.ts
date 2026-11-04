@@ -2,7 +2,7 @@ import { requestUrl, type RequestUrlResponse } from "obsidian";
 import { bytesToBase64 } from "./crypto";
 import type { CloudVault, DeviceChallenge, PluginData, RemoteFile, StoragePlan, UserProfile } from "./types";
 
-const API_URLS = ["https://api.syncdian.com", "https://syncdian.vayazka.com"];
+const API_URLS = ["https://api.syncdian.com", "https://syncdian.maslulsaefulloh.workers.dev"];
 
 export class SyncError extends Error {
   constructor(message: string, public readonly status: number, public readonly payload: any) {

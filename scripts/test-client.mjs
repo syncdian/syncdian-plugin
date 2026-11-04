@@ -59,7 +59,7 @@ try {
     return { status: 200, json: { revision: 0, changes: [], files: [], hasMore: false }, headers: {}, arrayBuffer: new ArrayBuffer(0), text: "" };
   };
   await client.manifest();
-  assert.ok(requests[4].url.startsWith("https://syncdian.vayazka.com/"));
+  assert.ok(requests[4].url.startsWith("https://syncdian.maslulsaefulloh.workers.dev/"));
   console.log("Client URL tests passed: vault IDs, historical hashes, and DNS fallback.");
 } finally {
   await rm(directory, { recursive: true, force: true });
