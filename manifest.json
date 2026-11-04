@@ -1,9 +1,9 @@
 {
   "id": "syncdian",
   "name": "Syncdian",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "minAppVersion": "1.5.0",
-  "description": "End-to-end encrypted Obsidian vault, settings, themes, and plugin sync with GitHub login.",
+  "description": "Automatic Obsidian vault, settings, themes, and plugin sync with GitHub login and server-side encryption.",
   "author": "Vayazka",
   "authorUrl": "https://github.com/vayazka",
   "isDesktopOnly": false

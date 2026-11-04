@@ -1,6 +1,6 @@
 import { Notice, normalizePath, type App } from "obsidian";
 import { SyncClient, SyncError } from "./client";
-import { decryptFile, decryptPath, encryptFile, encryptPath, fileId, sha256 } from "./crypto";
+import { sha256 } from "./crypto";
 import { isTextPath, mergeText } from "./merge";
 import type { PluginData, RemoteFile, SyncedFile, VaultSyncState } from "./types";
 
@@ -10,6 +10,7 @@ interface EngineOptions {
   state: () => VaultSyncState;
   persist: () => Promise<void>;
   status: (text: string) => void;
+  onSyncComplete?: () => void;
 }
 
 const CONFIG_FILES = new Set([
@@ -99,7 +100,7 @@ export class SyncEngine {
 
   private ready(): boolean {
     const data = this.options.data();
-    return Boolean(data.sessionToken && data.activeVaultId && data.vaultKeys[data.activeVaultId]);
+    return Boolean(data.sessionToken && data.activeVaultId);
   }
 
   private schedule(): void {
@@ -149,6 +150,7 @@ export class SyncEngine {
     await this.options.persist();
     this.connectWebSocket();
     this.options.status(`Syncdian: live · r${this.options.state().lastRevision}`);
+    this.options.onSyncComplete?.();
   }
 
   private async initializeRemote(): Promise<void> {
@@ -194,10 +196,8 @@ export class SyncEngine {
     for (const path of Array.from(this.pendingDeletes).sort()) {
       const state = this.options.state();
       const synced = state.files[path];
-      const id = synced?.id ?? await fileId(path, this.vaultKey());
-      const encryptedPath = synced?.encryptedPath ?? await encryptPath(path, this.vaultKey(), id);
       try {
-        const result = await this.client.remove(id, encryptedPath, synced?.version ?? 0);
+        const result = await this.client.remove(path, synced?.version ?? 0);
         state.files[path] = { ...result.file, path, plainHash: synced?.plainHash ?? "" };
         state.lastRevision = Math.max(state.lastRevision, result.revision);
         this.pendingDeletes.delete(path);
@@ -250,23 +250,14 @@ export class SyncEngine {
 
   private async uploadData(path: string, data: ArrayBuffer, baseVersion: number): Promise<void> {
     const state = this.options.state();
-    const key = this.vaultKey();
-    const id = await fileId(path, key);
-    const [encryptedPath, encrypted] = await Promise.all([
-      encryptPath(path, key, id),
-      encryptFile(data, key, id),
-    ]);
-    const hash = await sha256(encrypted);
     const plainHash = await sha256(data);
-    const result = await this.client.upload(id, encryptedPath, encrypted, hash, baseVersion);
-    state.files[path] = { ...result.file, path, plainHash };
+    const result = await this.client.upload(path, data, baseVersion);
+    state.files[path] = { ...result.file, plainHash };
     state.lastRevision = Math.max(state.lastRevision, result.revision);
   }
 
   private async applyRemote(remote: RemoteFile): Promise<void> {
-    const key = this.vaultKey();
-    const path = this.validRemotePath(await decryptPath(remote.encryptedPath, key, remote.id));
-    if (await fileId(path, key) !== remote.id) throw new Error("Remote file identity verification failed");
+    const path = this.validRemotePath(remote.path);
     const state = this.options.state();
     const synced = state.files[path];
     if (synced?.revision === remote.revision && synced.hash === remote.hash) return;
@@ -287,7 +278,7 @@ export class SyncEngine {
       return;
     }
 
-    const remoteData = await decryptFile(await this.client.download(remote.id), key, remote.id);
+    const remoteData = await this.client.download(remote.id);
     const remotePlainHash = await sha256(remoteData);
     if (localHash === remotePlainHash) {
       state.files[path] = { ...remote, path, plainHash: remotePlainHash };
@@ -301,7 +292,7 @@ export class SyncEngine {
     }
 
     const baseData = synced?.hash
-      ? await decryptFile(await this.client.download(remote.id, synced.hash), key, remote.id)
+      ? await this.client.download(remote.id, synced.hash)
       : new ArrayBuffer(0);
 
     if (isTextPath(path)) {
@@ -413,13 +404,6 @@ export class SyncEngine {
       normalized.split("/").some((part) => part === ".." || part === ".") || !this.included(normalized)
     ) throw new Error("Remote path failed validation");
     return normalized;
-  }
-
-  private vaultKey(): string {
-    const data = this.options.data();
-    const key = data.vaultKeys[data.activeVaultId];
-    if (!key) throw new Error("Vault is locked");
-    return key;
   }
 
   private connectWebSocket(): void {

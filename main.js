@@ -27,6 +27,22 @@ var import_obsidian3 = require("obsidian");
 
 // src/client.ts
 var import_obsidian = require("obsidian");
+
+// src/crypto.ts
+function bytesToBase64(data) {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 8192));
+  }
+  return btoa(binary);
+}
+async function sha256(data) {
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// src/client.ts
 var API_URL = "https://syncdian.vayazka.com";
 var SyncError = class extends Error {
   constructor(message, status, payload) {
@@ -53,15 +69,9 @@ var SyncClient = class {
   async listVaults() {
     return this.expectJson(await this.request("GET", "/v1/vaults"));
   }
-  async createVault(name, wrapped) {
-    const response = await this.expectJson(await this.request("POST", "/v1/vaults", { name, ...wrapped }));
+  async createVault(name) {
+    const response = await this.expectJson(await this.request("POST", "/v1/vaults", { name }));
     return response.vault;
-  }
-  getVaultKey(vaultId) {
-    return this.expectJson(this.request("GET", `/v1/vault/key?vaultId=${encodeURIComponent(vaultId)}`));
-  }
-  async updateVaultKey(vaultId, wrapped) {
-    await this.expectJson(this.request("PUT", `/v1/vault/key?vaultId=${encodeURIComponent(vaultId)}`, wrapped));
   }
   async manifest() {
     return this.expectJson(await this.request("GET", "/v1/manifest"));
@@ -74,21 +84,18 @@ var SyncClient = class {
     if (response.status >= 400) this.throwResponse(response);
     return response.arrayBuffer;
   }
-  async upload(id, encryptedPath, body, hash, baseVersion) {
+  async upload(path, body, baseVersion) {
     const response = await this.request("PUT", "/v1/file", void 0, body, {
-      "X-File-Id": id,
-      "X-Encrypted-Path": encryptedPath,
-      "X-Content-Hash": hash,
+      "X-File-Path": bytesToBase64(new TextEncoder().encode(path)),
       "X-Base-Version": String(baseVersion),
       "Content-Type": "application/octet-stream"
     });
     if (response.status >= 400) this.throwResponse(response);
     return this.expectJson(response);
   }
-  async remove(id, encryptedPath, baseVersion) {
+  async remove(path, baseVersion) {
     const response = await this.request("DELETE", "/v1/file", void 0, void 0, {
-      "X-File-Id": id,
-      "X-Encrypted-Path": encryptedPath,
+      "X-File-Path": bytesToBase64(new TextEncoder().encode(path)),
       "X-Base-Version": String(baseVersion)
     });
     if (response.status >= 400) this.throwResponse(response);
@@ -141,132 +148,6 @@ var SyncClient = class {
     throw new SyncError(payload.error ?? `Request failed (${response.status})`, response.status, payload);
   }
 };
-
-// src/crypto.ts
-var KEY_WRAP_ITERATIONS = 6e5;
-var aesKeys = /* @__PURE__ */ new Map();
-var hmacKeys = /* @__PURE__ */ new Map();
-function bytesToBase64(data) {
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 8192) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 8192));
-  }
-  return btoa(binary);
-}
-function base64ToBytes(value) {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(normalized);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-function generateVaultKey() {
-  return bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
-}
-function generateRecoveryCode() {
-  return bytesToBase64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-}
-async function deriveWrapKey(recoveryCode, salt, iterations) {
-  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(recoveryCode), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", hash: "SHA-256", salt, iterations },
-    material,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"]
-  );
-}
-async function wrapVaultKey(vaultKey, recoveryCode) {
-  const wrapSalt = crypto.getRandomValues(new Uint8Array(16));
-  const wrapNonce = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveWrapKey(recoveryCode, wrapSalt, KEY_WRAP_ITERATIONS);
-  const wrapped = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: wrapNonce, additionalData: new TextEncoder().encode("syncdian-key-v1") },
-    key,
-    base64ToBytes(vaultKey)
-  );
-  return {
-    wrappedKey: bytesToBase64(wrapped),
-    wrapSalt: bytesToBase64(wrapSalt),
-    wrapNonce: bytesToBase64(wrapNonce),
-    wrapIterations: KEY_WRAP_ITERATIONS,
-    keyVersion: 1
-  };
-}
-async function unwrapVaultKey(wrapped, recoveryCode) {
-  const key = await deriveWrapKey(recoveryCode, base64ToBytes(wrapped.wrapSalt), wrapped.wrapIterations);
-  const plaintext = await crypto.subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv: base64ToBytes(wrapped.wrapNonce),
-      additionalData: new TextEncoder().encode("syncdian-key-v1")
-    },
-    key,
-    base64ToBytes(wrapped.wrappedKey)
-  );
-  return bytesToBase64(plaintext);
-}
-function aesKey(vaultKey) {
-  if (!aesKeys.has(vaultKey)) {
-    aesKeys.set(vaultKey, crypto.subtle.importKey("raw", base64ToBytes(vaultKey), "AES-GCM", false, ["encrypt", "decrypt"]));
-  }
-  return aesKeys.get(vaultKey);
-}
-function hmacKey(vaultKey) {
-  if (!hmacKeys.has(vaultKey)) {
-    hmacKeys.set(vaultKey, crypto.subtle.importKey(
-      "raw",
-      base64ToBytes(vaultKey),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
-    ));
-  }
-  return hmacKeys.get(vaultKey);
-}
-async function fileId(path, vaultKey) {
-  const signature = await crypto.subtle.sign("HMAC", await hmacKey(vaultKey), new TextEncoder().encode(path));
-  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-async function encryptWithAad(plaintext, vaultKey, aad) {
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(aad) },
-    await aesKey(vaultKey),
-    plaintext
-  );
-  const combined = new Uint8Array(nonce.length + ciphertext.byteLength);
-  combined.set(nonce);
-  combined.set(new Uint8Array(ciphertext), nonce.length);
-  return combined.buffer;
-}
-async function decryptWithAad(encrypted, vaultKey, aad) {
-  const bytes = new Uint8Array(encrypted);
-  if (bytes.length < 29) throw new Error("Invalid encrypted payload");
-  return crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: bytes.slice(0, 12), additionalData: new TextEncoder().encode(aad) },
-    await aesKey(vaultKey),
-    bytes.slice(12)
-  );
-}
-function encryptFile(plaintext, vaultKey, id) {
-  return encryptWithAad(plaintext, vaultKey, `syncdian-file-v1:${id}`);
-}
-function decryptFile(encrypted, vaultKey, id) {
-  return decryptWithAad(encrypted, vaultKey, `syncdian-file-v1:${id}`);
-}
-async function encryptPath(path, vaultKey, id) {
-  return bytesToBase64(await encryptWithAad(new TextEncoder().encode(path).buffer, vaultKey, `syncdian-path-v1:${id}`));
-}
-async function decryptPath(encryptedPath, vaultKey, id) {
-  const decrypted = await decryptWithAad(base64ToBytes(encryptedPath).buffer, vaultKey, `syncdian-path-v1:${id}`);
-  return new TextDecoder().decode(decrypted);
-}
-async function sha256(data) {
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 // src/sync.ts
 var import_obsidian2 = require("obsidian");
@@ -630,7 +511,7 @@ var SyncEngine = class {
   }
   ready() {
     const data = this.options.data();
-    return Boolean(data.sessionToken && data.activeVaultId && data.vaultKeys[data.activeVaultId]);
+    return Boolean(data.sessionToken && data.activeVaultId);
   }
   schedule() {
     if (this.stopped || !this.options.data().autoSync) return;
@@ -677,6 +558,7 @@ var SyncEngine = class {
     await this.options.persist();
     this.connectWebSocket();
     this.options.status(`Syncdian: live \xB7 r${this.options.state().lastRevision}`);
+    this.options.onSyncComplete?.();
   }
   async initializeRemote() {
     const manifest = await this.client.manifest();
@@ -718,10 +600,8 @@ var SyncEngine = class {
     for (const path of Array.from(this.pendingDeletes).sort()) {
       const state = this.options.state();
       const synced = state.files[path];
-      const id = synced?.id ?? await fileId(path, this.vaultKey());
-      const encryptedPath = synced?.encryptedPath ?? await encryptPath(path, this.vaultKey(), id);
       try {
-        const result = await this.client.remove(id, encryptedPath, synced?.version ?? 0);
+        const result = await this.client.remove(path, synced?.version ?? 0);
         state.files[path] = { ...result.file, path, plainHash: synced?.plainHash ?? "" };
         state.lastRevision = Math.max(state.lastRevision, result.revision);
         this.pendingDeletes.delete(path);
@@ -771,22 +651,13 @@ var SyncEngine = class {
   }
   async uploadData(path, data, baseVersion) {
     const state = this.options.state();
-    const key = this.vaultKey();
-    const id = await fileId(path, key);
-    const [encryptedPath, encrypted] = await Promise.all([
-      encryptPath(path, key, id),
-      encryptFile(data, key, id)
-    ]);
-    const hash = await sha256(encrypted);
     const plainHash = await sha256(data);
-    const result = await this.client.upload(id, encryptedPath, encrypted, hash, baseVersion);
-    state.files[path] = { ...result.file, path, plainHash };
+    const result = await this.client.upload(path, data, baseVersion);
+    state.files[path] = { ...result.file, plainHash };
     state.lastRevision = Math.max(state.lastRevision, result.revision);
   }
   async applyRemote(remote) {
-    const key = this.vaultKey();
-    const path = this.validRemotePath(await decryptPath(remote.encryptedPath, key, remote.id));
-    if (await fileId(path, key) !== remote.id) throw new Error("Remote file identity verification failed");
+    const path = this.validRemotePath(remote.path);
     const state = this.options.state();
     const synced = state.files[path];
     if (synced?.revision === remote.revision && synced.hash === remote.hash) return;
@@ -803,7 +674,7 @@ var SyncEngine = class {
       }
       return;
     }
-    const remoteData = await decryptFile(await this.client.download(remote.id), key, remote.id);
+    const remoteData = await this.client.download(remote.id);
     const remotePlainHash = await sha256(remoteData);
     if (localHash === remotePlainHash) {
       state.files[path] = { ...remote, path, plainHash: remotePlainHash };
@@ -814,7 +685,7 @@ var SyncEngine = class {
       state.files[path] = { ...remote, path, plainHash: remotePlainHash };
       return;
     }
-    const baseData = synced?.hash ? await decryptFile(await this.client.download(remote.id, synced.hash), key, remote.id) : new ArrayBuffer(0);
+    const baseData = synced?.hash ? await this.client.download(remote.id, synced.hash) : new ArrayBuffer(0);
     if (isTextPath(path)) {
       const merged = mergeText(localData, baseData, remoteData);
       const mergedHash = await sha256(merged.data);
@@ -914,12 +785,6 @@ var SyncEngine = class {
     if (!normalized || normalized.startsWith("/") || normalized.includes("\\") || normalized.includes("\0") || normalized.split("/").some((part) => part === ".." || part === ".") || !this.included(normalized)) throw new Error("Remote path failed validation");
     return normalized;
   }
-  vaultKey() {
-    const data = this.options.data();
-    const key = data.vaultKeys[data.activeVaultId];
-    if (!key) throw new Error("Vault is locked");
-    return key;
-  }
   connectWebSocket() {
     if (this.stopped || this.socket && this.socket.readyState <= WebSocket.OPEN) return;
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
@@ -953,6 +818,7 @@ var SyncdianPlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.cloudVaults = [];
+    this.plan = null;
     this.challenge = null;
     this.loginInProgress = false;
   }
@@ -978,7 +844,8 @@ var SyncdianPlugin = class extends import_obsidian3.Plugin {
       data: () => this.data,
       state: () => this.activeState(),
       persist: () => this.persist(),
-      status: (text) => this.statusBar.setText(text)
+      status: (text) => this.statusBar.setText(text),
+      onSyncComplete: () => void this.refreshUsage()
     });
     this.settingsTab = new SyncdianSettingTab(this.app, this);
     this.addSettingTab(this.settingsTab);
@@ -1008,22 +875,6 @@ var SyncdianPlugin = class extends import_obsidian3.Plugin {
   syncNow() {
     this.engine.syncNow();
   }
-  async handleStatusClick() {
-    if (!this.data.sessionToken) {
-      await this.login();
-      return;
-    }
-    if (!this.data.activeVaultId || !this.data.vaultKeys[this.data.activeVaultId]) {
-      const setting = this.app.setting;
-      setting.open();
-      setting.openTabById(this.manifest.id);
-      return;
-    }
-    this.engine.syncNow();
-  }
-  activeVaultIdSafe() {
-    return this.data.activeVaultId || this.cloudVaults[0]?.id || "";
-  }
   activeState() {
     var _a;
     const id = this.data.activeVaultId || "default";
@@ -1041,7 +892,7 @@ var SyncdianPlugin = class extends import_obsidian3.Plugin {
       this.refreshDisplay();
       const challenge = this.challenge;
       window.open(challenge.verificationUriComplete ?? challenge.verificationUri, "_blank");
-      let interval = Math.max(challenge.interval, 5);
+      const interval = Math.max(challenge.interval, 5);
       const deadline = Date.now() + challenge.expiresIn * 1e3;
       while (Date.now() < deadline && this.challenge === challenge) {
         await new Promise((resolve) => setTimeout(resolve, interval * 1e3));
@@ -1074,66 +925,58 @@ var SyncdianPlugin = class extends import_obsidian3.Plugin {
     try {
       const result = await this.client.listVaults();
       this.cloudVaults = result.vaults;
+      this.plan = result.plan;
       this.data.user = result.user;
+      if (result.vaults.length === 0) {
+        await this.createVault();
+        return;
+      }
+      if (result.plan.maxVaults === 1) {
+        const changed = this.data.activeVaultId !== result.vaults[0].id;
+        this.data.activeVaultId = result.vaults[0].id;
+        await this.persist();
+        if (changed) this.restartEngine();
+      } else if (!result.vaults.some((vault) => vault.id === this.data.activeVaultId)) {
+        this.data.activeVaultId = "";
+        this.statusBar.setText("Syncdian: choose vault");
+        await this.persist();
+      }
       this.refreshDisplay();
     } catch (caught) {
-      console.error("Syncdian could not list vaults", caught);
+      console.error("Syncdian could not initialize vaults", caught);
+      new import_obsidian3.Notice(`Syncdian: ${caught instanceof Error ? caught.message : "Could not initialize vault"}`, 8e3);
+    }
+  }
+  async refreshUsage() {
+    if (!this.data.sessionToken) return;
+    try {
+      const result = await this.client.listVaults();
+      this.cloudVaults = result.vaults;
+      this.plan = result.plan;
+      this.refreshDisplay();
+    } catch {
     }
   }
   async createVault() {
     if (!this.data.sessionToken) return;
     try {
-      const vaultKey = generateVaultKey();
-      const recoveryCode = generateRecoveryCode();
-      const wrapped = await wrapVaultKey(vaultKey, recoveryCode);
-      const vault = await this.client.createVault(this.app.vault.getName(), wrapped);
-      this.data.vaultKeys[vault.id] = vaultKey;
+      const vault = await this.client.createVault(this.app.vault.getName());
       this.data.activeVaultId = vault.id;
       this.data.states[vault.id] = { initialized: false, lastRevision: 0, files: {} };
       await this.persist();
-      await this.refreshVaults();
+      await this.refreshUsage();
       this.restartEngine();
-      new SetupCodeModal(this.app, recoveryCode).open();
       this.refreshDisplay();
     } catch (caught) {
       new import_obsidian3.Notice(`Syncdian: ${caught instanceof Error ? caught.message : "Could not create vault"}`, 8e3);
     }
   }
-  async unlockVault(vaultId, setupCode) {
-    if (!vaultId) {
-      new import_obsidian3.Notice("Syncdian: choose a synced vault");
-      return;
-    }
-    try {
-      if (!this.data.vaultKeys[vaultId]) {
-        if (!setupCode) {
-          new import_obsidian3.Notice("Syncdian: enter the setup code from a connected device");
-          return;
-        }
-        const wrapped = await this.client.getVaultKey(vaultId);
-        this.data.vaultKeys[vaultId] = await unwrapVaultKey(wrapped, setupCode);
-      }
-      this.data.activeVaultId = vaultId;
-      await this.persist();
-      this.restartEngine();
-      this.refreshDisplay();
-    } catch (caught) {
-      delete this.data.vaultKeys[vaultId];
-      new import_obsidian3.Notice("Syncdian: setup code is incorrect or the vault could not be opened", 8e3);
-    }
-  }
-  async connectAnotherDevice() {
-    const vaultId = this.data.activeVaultId;
-    const vaultKey = this.data.vaultKeys[vaultId];
-    if (!vaultId || !vaultKey) return;
-    try {
-      const setupCode = generateRecoveryCode();
-      const wrapped = await wrapVaultKey(vaultKey, setupCode);
-      await this.client.updateVaultKey(vaultId, wrapped);
-      new SetupCodeModal(this.app, setupCode).open();
-    } catch (caught) {
-      new import_obsidian3.Notice(`Syncdian: ${caught instanceof Error ? caught.message : "Could not create setup code"}`, 8e3);
-    }
+  async selectVault(vaultId) {
+    if (!vaultId) return;
+    this.data.activeVaultId = vaultId;
+    await this.persist();
+    this.restartEngine();
+    this.refreshDisplay();
   }
   async logout() {
     this.engine.stop();
@@ -1146,9 +989,23 @@ var SyncdianPlugin = class extends import_obsidian3.Plugin {
     this.data.activeVaultId = "";
     this.data.vaultKeys = {};
     this.cloudVaults = [];
+    this.plan = null;
     await this.persist();
     this.statusBar.setText("Syncdian: login required");
     this.refreshDisplay();
+  }
+  async handleStatusClick() {
+    if (!this.data.sessionToken) {
+      await this.login();
+      return;
+    }
+    if (!this.data.activeVaultId) {
+      const setting = this.app.setting;
+      setting.open();
+      setting.openTabById(this.manifest.id);
+      return;
+    }
+    this.engine.syncNow();
   }
   restartEngine() {
     this.engine.stop();
@@ -1160,20 +1017,16 @@ var SyncdianSettingTab = class extends import_obsidian3.PluginSettingTab {
     super(app, plugin);
     this.plugin = plugin;
     this.selectedVaultId = "";
-    this.recoveryCode = "";
   }
   display() {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Syncdian" });
-    containerEl.createEl("p", {
-      text: "End-to-end encrypted vault, settings, themes, and plugin synchronization. Local vault names can be different on every device."
-    });
+    containerEl.createEl("p", { text: "Secure vault, settings, themes, and plugin synchronization across your devices." });
     if (!this.plugin.data.sessionToken) {
-      new import_obsidian3.Setting(containerEl).setName("GitHub account").setDesc("Sign in with GitHub Device Flow; no client secret is stored in the plugin.").addButton((button) => button.setButtonText("Login with GitHub").setCta().onClick(() => void this.plugin.login()));
+      new import_obsidian3.Setting(containerEl).setName("GitHub account").setDesc("Login once and synchronization starts automatically.").addButton((button) => button.setButtonText("Login with GitHub").setCta().onClick(() => void this.plugin.login()));
       if (this.plugin.challenge) {
-        const setting = new import_obsidian3.Setting(containerEl).setName("GitHub verification").setDesc(`Enter code ${this.plugin.challenge.userCode} in the browser.`);
-        setting.addButton((button) => button.setButtonText("Open GitHub").onClick(() => {
+        new import_obsidian3.Setting(containerEl).setName("GitHub verification").setDesc(`Enter code ${this.plugin.challenge.userCode} in the browser.`).addButton((button) => button.setButtonText("Open GitHub").onClick(() => {
           if (this.plugin.challenge) window.open(this.plugin.challenge.verificationUriComplete ?? this.plugin.challenge.verificationUri, "_blank");
         }));
       }
@@ -1182,59 +1035,48 @@ var SyncdianSettingTab = class extends import_obsidian3.PluginSettingTab {
     new import_obsidian3.Setting(containerEl).setName("GitHub account").setDesc(`Logged in as @${this.plugin.data.user?.login ?? "unknown"}`).addButton((button) => button.setButtonText("Logout").onClick(() => void this.plugin.logout()));
     const active = this.plugin.cloudVaults.find((vault) => vault.id === this.plugin.data.activeVaultId);
     if (active) {
-      containerEl.createEl("p", { text: `This vault is synced as \u201C${active.name}\u201D.` });
-      new import_obsidian3.Setting(containerEl).setName("Sync now").setDesc("Check for changes on this device and your other devices.").addButton((button) => button.setButtonText("Sync now").setCta().onClick(() => this.plugin.syncNow()));
-      new import_obsidian3.Setting(containerEl).setName("Connect another device").setDesc("Get a setup code to connect a phone, tablet, or another computer.").addButton((button) => button.setButtonText("Get setup code").onClick(() => void this.plugin.connectAnotherDevice()));
-    } else if (this.plugin.cloudVaults.length === 0) {
-      new import_obsidian3.Setting(containerEl).setName("Sync this vault").setDesc(`Start syncing \u201C${this.plugin.app.vault.getName()}\u201D. Encryption is set up automatically.`).addButton((button) => button.setButtonText("Sync this vault").setCta().onClick(() => void this.plugin.createVault()));
-    } else {
-      this.selectedVaultId || (this.selectedVaultId = this.plugin.activeVaultIdSafe());
-      if (this.plugin.cloudVaults.length > 1) {
-        new import_obsidian3.Setting(containerEl).setName("Synced vault").setDesc("Choose the vault you want to use on this device.").addDropdown((dropdown) => {
-          for (const vault of this.plugin.cloudVaults) dropdown.addOption(vault.id, vault.name);
-          dropdown.setValue(this.selectedVaultId).onChange((value) => {
-            this.selectedVaultId = value;
-          });
+      containerEl.createEl("p", { text: `Syncing \u201C${active.name}\u201D.` });
+      new import_obsidian3.Setting(containerEl).setName("Sync now").addButton((button) => button.setButtonText("Sync now").setCta().onClick(() => this.plugin.syncNow()));
+    }
+    const plan = this.plugin.plan;
+    if (plan && plan.maxVaults > 1) {
+      this.selectedVaultId || (this.selectedVaultId = this.plugin.data.activeVaultId || this.plugin.cloudVaults[0]?.id || "");
+      new import_obsidian3.Setting(containerEl).setName("Vault").setDesc("Choose which synced vault to use on this device.").addDropdown((dropdown) => {
+        for (const vault of this.plugin.cloudVaults) dropdown.addOption(vault.id, vault.name);
+        dropdown.setValue(this.selectedVaultId).onChange((value) => {
+          this.selectedVaultId = value;
         });
-      } else {
-        containerEl.createEl("p", { text: `Connect this device to \u201C${this.plugin.cloudVaults[0].name}\u201D.` });
+      }).addButton((button) => button.setButtonText("Use vault").onClick(() => void this.plugin.selectVault(this.selectedVaultId)));
+      if (this.plugin.cloudVaults.length < plan.maxVaults) {
+        new import_obsidian3.Setting(containerEl).setName("New vault").setDesc(`${this.plugin.cloudVaults.length} of ${plan.maxVaults} vaults used.`).addButton((button) => button.setButtonText("Create new vault").onClick(() => void this.plugin.createVault()));
       }
-      if (!this.plugin.data.vaultKeys[this.selectedVaultId]) {
-        new import_obsidian3.Setting(containerEl).setName("Setup code").setDesc("On a connected device, open Syncdian and choose Get setup code.").addText((text) => {
-          text.inputEl.type = "password";
-          text.setPlaceholder("Paste setup code").onChange((value) => {
-            this.recoveryCode = value.trim();
-          });
-        });
-      }
-      new import_obsidian3.Setting(containerEl).addButton((button) => button.setButtonText("Connect this device").setCta().onClick(() => {
-        void this.plugin.unlockVault(this.selectedVaultId, this.recoveryCode);
+    }
+    if (plan) {
+      const percentage = Math.min(100, Math.round(plan.usedBytes / plan.storageQuotaBytes * 100));
+      const setting = new import_obsidian3.Setting(containerEl).setName("Storage").setDesc(`${formatBytes(plan.usedBytes)} of ${formatBytes(plan.storageQuotaBytes)} used (${percentage}%).`);
+      const progress = setting.controlEl.createEl("progress");
+      progress.max = plan.storageQuotaBytes;
+      progress.value = plan.usedBytes;
+      progress.style.width = "100%";
+      new import_obsidian3.Setting(containerEl).setName("Need more storage?").setDesc("Email us with your account and current usage.").addButton((button) => button.setButtonText("Need more storage").onClick(() => {
+        const subject = encodeURIComponent("Syncdian storage upgrade");
+        const body = encodeURIComponent(`Hi Vayazka,
+
+I need more Syncdian storage.
+GitHub: @${this.plugin.data.user?.login ?? "unknown"}
+Usage: ${formatBytes(plan.usedBytes)} of ${formatBytes(plan.storageQuotaBytes)}
+`);
+        window.open(`mailto:helo@vayazka.com?subject=${subject}&body=${body}`, "_blank");
       }));
     }
     new import_obsidian3.Setting(containerEl).setName("Automatic sync").addToggle((toggle) => toggle.setValue(this.plugin.data.autoSync).onChange((value) => {
       this.plugin.data.autoSync = value;
       void this.plugin.persist();
     }));
-    if (active || this.plugin.cloudVaults.length > 0) {
-      new import_obsidian3.Setting(containerEl).setName("Create a separate synced vault").setDesc("Keep the current vault separate and sync this local vault as a new one.").addButton((button) => button.setButtonText("Create separate vault").onClick(() => void this.plugin.createVault()));
-    }
   }
 };
-var SetupCodeModal = class extends import_obsidian3.Modal {
-  constructor(app, code) {
-    super(app);
-    this.code = code;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Connect another device" });
-    contentEl.createEl("p", { text: "Copy this setup code, then choose Connect this device in Syncdian on your other device. You can generate a new code here anytime." });
-    const codeEl = contentEl.createEl("pre", { text: this.code });
-    codeEl.style.userSelect = "all";
-    codeEl.style.wordBreak = "break-all";
-    new import_obsidian3.Setting(contentEl).addButton((button) => button.setButtonText("Copy code").onClick(() => {
-      void navigator.clipboard.writeText(this.code);
-      new import_obsidian3.Notice("Syncdian: setup code copied");
-    })).addButton((button) => button.setButtonText("Done").setCta().onClick(() => this.close()));
-  }
-};
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

@@ -1,8 +1,8 @@
-# Syncdian
+# Syncdian Plugin
 
-End-to-end encrypted Obsidian plugin for syncing notes, attachments, settings, themes, snippets, and other community plugins across macOS, iOS, and Android.
+Automatic Obsidian synchronization for macOS, iOS, and Android. Sync notes, attachments, settings, themes, snippets, and other community plugins using GitHub login and server-side encryption.
 
-This public repository contains **only the Obsidian plugin**. The Cloudflare backend and deployment configuration are maintained separately in a private repository.
+This public repository contains **only the Obsidian plugin**. The Cloudflare backend is maintained privately at [vayazka/syncdian](https://github.com/vayazka/syncdian).
 
 ## Install with BRAT
 
@@ -11,25 +11,44 @@ This public repository contains **only the Obsidian plugin**. The Cloudflare bac
 3. Enter `https://github.com/vayazka/syncdian-plugin`.
 4. Enable **Syncdian** in Community Plugins.
 5. Open **Settings → Syncdian** and choose **Login with GitHub**.
-6. Choose **Sync this vault**. Encryption is configured automatically.
-7. To connect another device, choose **Get setup code** on a connected device, then **Connect this device** on the new device and paste the code.
 
-Releases contain `main.js`, `manifest.json`, and `versions.json` as top-level assets. BRAT can install updates without manually copying files.
+That is the entire setup for the default tier. Your first vault is created automatically, or your existing primary vault is selected automatically. Repeat the same install and login steps on your other devices.
+
+## Default tier
+
+- 1 synced vault per GitHub user
+- 100 MB storage per user
+- Automatic vault creation and selection
+- Storage usage indicator in settings
+
+## Multi-vault tiers
+
+Accounts with `max_vaults` greater than one can:
+
+- Choose a vault and select **Use vault**.
+- Create additional vaults while vault quota remains.
+- Use different local vault names on different devices.
+
+Vault limits and storage quotas are configured per user in D1.
+
+## Storage upgrades
+
+Open **Settings → Syncdian** to see current usage. Choose **Need more storage** to draft an email to `helo@vayazka.com` with your GitHub account and usage.
 
 ## Features
 
 - GitHub Device Flow login
-- Multiple users and multiple synced vaults
-- Local vault names can differ across devices
-- End-to-end encrypted file contents and paths
+- Automatic first-vault setup
+- Multiple users and configurable per-user tiers
+- Server-side encrypted file storage
 - Automatic three-way merging for text files
 - Conflict markers for overlapping text edits and conflict copies for binary files
 - Realtime notifications and offline catch-up
 - Notes, attachments, settings, themes, snippets, and other plugin synchronization
 
-Workspace layouts, caches, `.trash/`, login sessions, device IDs, setup material, and Syncdian vault keys remain device-local. Syncdian itself is updated through BRAT rather than synchronized.
+Workspace layouts, caches, `.trash/`, login sessions, and device IDs remain device-local. Syncdian itself is updated through BRAT rather than synchronized.
 
-Third-party plugin configuration can contain credentials. Syncdian encrypts it in transit and at rest, but it becomes readable on every device that unlocks the vault. Only connect devices you trust.
+Third-party plugin configuration can contain credentials. Syncdian encrypts it in transit and at rest, but it becomes readable on every connected device. Only connect devices you trust. Server-side encryption is not end-to-end encryption: the backend manages vault encryption keys.
 
 ## Merge behavior
 
@@ -48,6 +67,7 @@ Sync is near-realtime at file granularity, not character-level collaborative edi
 npm install
 npm run typecheck
 npm run test:merge
+npm run test:client
 npm run build
 ```
 

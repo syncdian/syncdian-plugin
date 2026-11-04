@@ -1,13 +1,13 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 import { SyncClient } from "./client";
-import { generateRecoveryCode, generateVaultKey, unwrapVaultKey, wrapVaultKey } from "./crypto";
 import { SyncEngine } from "./sync";
-import { EMPTY_DATA, type CloudVault, type DeviceChallenge, type PluginData, type VaultSyncState } from "./types";
+import { EMPTY_DATA, type CloudVault, type DeviceChallenge, type PluginData, type StoragePlan, type VaultSyncState } from "./types";
 
 export default class SyncdianPlugin extends Plugin {
   data!: PluginData;
   client!: SyncClient;
   cloudVaults: CloudVault[] = [];
+  plan: StoragePlan | null = null;
   challenge: DeviceChallenge | null = null;
   private engine!: SyncEngine;
   private statusBar!: HTMLElement;
@@ -36,6 +36,7 @@ export default class SyncdianPlugin extends Plugin {
       state: () => this.activeState(),
       persist: () => this.persist(),
       status: (text) => this.statusBar.setText(text),
+      onSyncComplete: () => void this.refreshUsage(),
     });
     this.settingsTab = new SyncdianSettingTab(this.app, this);
     this.addSettingTab(this.settingsTab);
@@ -69,24 +70,6 @@ export default class SyncdianPlugin extends Plugin {
     this.engine.syncNow();
   }
 
-  private async handleStatusClick(): Promise<void> {
-    if (!this.data.sessionToken) {
-      await this.login();
-      return;
-    }
-    if (!this.data.activeVaultId || !this.data.vaultKeys[this.data.activeVaultId]) {
-      const setting = (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting;
-      setting.open();
-      setting.openTabById(this.manifest.id);
-      return;
-    }
-    this.engine.syncNow();
-  }
-
-  activeVaultIdSafe(): string {
-    return this.data.activeVaultId || this.cloudVaults[0]?.id || "";
-  }
-
   activeState(): VaultSyncState {
     const id = this.data.activeVaultId || "default";
     this.data.states[id] ||= { initialized: false, lastRevision: 0, files: {} };
@@ -105,7 +88,7 @@ export default class SyncdianPlugin extends Plugin {
       this.refreshDisplay();
       const challenge = this.challenge;
       window.open(challenge.verificationUriComplete ?? challenge.verificationUri, "_blank");
-      let interval = Math.max(challenge.interval, 5);
+      const interval = Math.max(challenge.interval, 5);
       const deadline = Date.now() + challenge.expiresIn * 1000;
       while (Date.now() < deadline && this.challenge === challenge) {
         await new Promise((resolve) => setTimeout(resolve, interval * 1000));
@@ -139,69 +122,62 @@ export default class SyncdianPlugin extends Plugin {
     try {
       const result = await this.client.listVaults();
       this.cloudVaults = result.vaults;
+      this.plan = result.plan;
       this.data.user = result.user;
+      if (result.vaults.length === 0) {
+        await this.createVault();
+        return;
+      }
+      if (result.plan.maxVaults === 1) {
+        const changed = this.data.activeVaultId !== result.vaults[0].id;
+        this.data.activeVaultId = result.vaults[0].id;
+        await this.persist();
+        if (changed) this.restartEngine();
+      } else if (!result.vaults.some((vault) => vault.id === this.data.activeVaultId)) {
+        this.data.activeVaultId = "";
+        this.statusBar.setText("Syncdian: choose vault");
+        await this.persist();
+      }
       this.refreshDisplay();
     } catch (caught) {
-      console.error("Syncdian could not list vaults", caught);
+      console.error("Syncdian could not initialize vaults", caught);
+      new Notice(`Syncdian: ${caught instanceof Error ? caught.message : "Could not initialize vault"}`, 8000);
+    }
+  }
+
+  async refreshUsage(): Promise<void> {
+    if (!this.data.sessionToken) return;
+    try {
+      const result = await this.client.listVaults();
+      this.cloudVaults = result.vaults;
+      this.plan = result.plan;
+      this.refreshDisplay();
+    } catch {
+      // Usage refresh is non-critical and must not interrupt file sync.
     }
   }
 
   async createVault(): Promise<void> {
     if (!this.data.sessionToken) return;
     try {
-      const vaultKey = generateVaultKey();
-      const recoveryCode = generateRecoveryCode();
-      const wrapped = await wrapVaultKey(vaultKey, recoveryCode);
-      const vault = await this.client.createVault(this.app.vault.getName(), wrapped);
-      this.data.vaultKeys[vault.id] = vaultKey;
+      const vault = await this.client.createVault(this.app.vault.getName());
       this.data.activeVaultId = vault.id;
       this.data.states[vault.id] = { initialized: false, lastRevision: 0, files: {} };
       await this.persist();
-      await this.refreshVaults();
+      await this.refreshUsage();
       this.restartEngine();
-      new SetupCodeModal(this.app, recoveryCode).open();
       this.refreshDisplay();
     } catch (caught) {
       new Notice(`Syncdian: ${caught instanceof Error ? caught.message : "Could not create vault"}`, 8000);
     }
   }
 
-  async unlockVault(vaultId: string, setupCode: string): Promise<void> {
-    if (!vaultId) {
-      new Notice("Syncdian: choose a synced vault");
-      return;
-    }
-    try {
-      if (!this.data.vaultKeys[vaultId]) {
-        if (!setupCode) {
-          new Notice("Syncdian: enter the setup code from a connected device");
-          return;
-        }
-        const wrapped = await this.client.getVaultKey(vaultId);
-        this.data.vaultKeys[vaultId] = await unwrapVaultKey(wrapped, setupCode);
-      }
-      this.data.activeVaultId = vaultId;
-      await this.persist();
-      this.restartEngine();
-      this.refreshDisplay();
-    } catch (caught) {
-      delete this.data.vaultKeys[vaultId];
-      new Notice("Syncdian: setup code is incorrect or the vault could not be opened", 8000);
-    }
-  }
-
-  async connectAnotherDevice(): Promise<void> {
-    const vaultId = this.data.activeVaultId;
-    const vaultKey = this.data.vaultKeys[vaultId];
-    if (!vaultId || !vaultKey) return;
-    try {
-      const setupCode = generateRecoveryCode();
-      const wrapped = await wrapVaultKey(vaultKey, setupCode);
-      await this.client.updateVaultKey(vaultId, wrapped);
-      new SetupCodeModal(this.app, setupCode).open();
-    } catch (caught) {
-      new Notice(`Syncdian: ${caught instanceof Error ? caught.message : "Could not create setup code"}`, 8000);
-    }
+  async selectVault(vaultId: string): Promise<void> {
+    if (!vaultId) return;
+    this.data.activeVaultId = vaultId;
+    await this.persist();
+    this.restartEngine();
+    this.refreshDisplay();
   }
 
   async logout(): Promise<void> {
@@ -212,9 +188,24 @@ export default class SyncdianPlugin extends Plugin {
     this.data.activeVaultId = "";
     this.data.vaultKeys = {};
     this.cloudVaults = [];
+    this.plan = null;
     await this.persist();
     this.statusBar.setText("Syncdian: login required");
     this.refreshDisplay();
+  }
+
+  private async handleStatusClick(): Promise<void> {
+    if (!this.data.sessionToken) {
+      await this.login();
+      return;
+    }
+    if (!this.data.activeVaultId) {
+      const setting = (this.app as unknown as { setting: { open(): void; openTabById(id: string): void } }).setting;
+      setting.open();
+      setting.openTabById(this.manifest.id);
+      return;
+    }
+    this.engine.syncNow();
   }
 
   private restartEngine(): void {
@@ -225,7 +216,6 @@ export default class SyncdianPlugin extends Plugin {
 
 class SyncdianSettingTab extends PluginSettingTab {
   private selectedVaultId = "";
-  private recoveryCode = "";
 
   constructor(app: App, private readonly plugin: SyncdianPlugin) {
     super(app, plugin);
@@ -235,18 +225,16 @@ class SyncdianSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Syncdian" });
-    containerEl.createEl("p", {
-      text: "End-to-end encrypted vault, settings, themes, and plugin synchronization. Local vault names can be different on every device.",
-    });
+    containerEl.createEl("p", { text: "Secure vault, settings, themes, and plugin synchronization across your devices." });
 
     if (!this.plugin.data.sessionToken) {
-      new Setting(containerEl).setName("GitHub account").setDesc("Sign in with GitHub Device Flow; no client secret is stored in the plugin.")
+      new Setting(containerEl).setName("GitHub account").setDesc("Login once and synchronization starts automatically.")
         .addButton((button) => button.setButtonText("Login with GitHub").setCta().onClick(() => void this.plugin.login()));
       if (this.plugin.challenge) {
-        const setting = new Setting(containerEl).setName("GitHub verification").setDesc(`Enter code ${this.plugin.challenge.userCode} in the browser.`);
-        setting.addButton((button) => button.setButtonText("Open GitHub").onClick(() => {
-          if (this.plugin.challenge) window.open(this.plugin.challenge.verificationUriComplete ?? this.plugin.challenge.verificationUri, "_blank");
-        }));
+        new Setting(containerEl).setName("GitHub verification").setDesc(`Enter code ${this.plugin.challenge.userCode} in the browser.`)
+          .addButton((button) => button.setButtonText("Open GitHub").onClick(() => {
+            if (this.plugin.challenge) window.open(this.plugin.challenge.verificationUriComplete ?? this.plugin.challenge.verificationUri, "_blank");
+          }));
       }
       return;
     }
@@ -256,66 +244,50 @@ class SyncdianSettingTab extends PluginSettingTab {
 
     const active = this.plugin.cloudVaults.find((vault) => vault.id === this.plugin.data.activeVaultId);
     if (active) {
-      containerEl.createEl("p", { text: `This vault is synced as “${active.name}”.` });
-      new Setting(containerEl).setName("Sync now").setDesc("Check for changes on this device and your other devices.")
+      containerEl.createEl("p", { text: `Syncing “${active.name}”.` });
+      new Setting(containerEl).setName("Sync now")
         .addButton((button) => button.setButtonText("Sync now").setCta().onClick(() => this.plugin.syncNow()));
-      new Setting(containerEl).setName("Connect another device").setDesc("Get a setup code to connect a phone, tablet, or another computer.")
-        .addButton((button) => button.setButtonText("Get setup code").onClick(() => void this.plugin.connectAnotherDevice()));
-    } else if (this.plugin.cloudVaults.length === 0) {
-      new Setting(containerEl)
-        .setName("Sync this vault")
-        .setDesc(`Start syncing “${this.plugin.app.vault.getName()}”. Encryption is set up automatically.`)
-        .addButton((button) => button.setButtonText("Sync this vault").setCta().onClick(() => void this.plugin.createVault()));
-    } else {
-      this.selectedVaultId ||= this.plugin.activeVaultIdSafe();
-      if (this.plugin.cloudVaults.length > 1) {
-        new Setting(containerEl).setName("Synced vault").setDesc("Choose the vault you want to use on this device.")
-          .addDropdown((dropdown) => {
-            for (const vault of this.plugin.cloudVaults) dropdown.addOption(vault.id, vault.name);
-            dropdown.setValue(this.selectedVaultId).onChange((value) => { this.selectedVaultId = value; });
-          });
-      } else {
-        containerEl.createEl("p", { text: `Connect this device to “${this.plugin.cloudVaults[0].name}”.` });
+    }
+
+    const plan = this.plugin.plan;
+    if (plan && plan.maxVaults > 1) {
+      this.selectedVaultId ||= this.plugin.data.activeVaultId || this.plugin.cloudVaults[0]?.id || "";
+      new Setting(containerEl).setName("Vault").setDesc("Choose which synced vault to use on this device.")
+        .addDropdown((dropdown) => {
+          for (const vault of this.plugin.cloudVaults) dropdown.addOption(vault.id, vault.name);
+          dropdown.setValue(this.selectedVaultId).onChange((value) => { this.selectedVaultId = value; });
+        })
+        .addButton((button) => button.setButtonText("Use vault").onClick(() => void this.plugin.selectVault(this.selectedVaultId)));
+      if (this.plugin.cloudVaults.length < plan.maxVaults) {
+        new Setting(containerEl).setName("New vault").setDesc(`${this.plugin.cloudVaults.length} of ${plan.maxVaults} vaults used.`)
+          .addButton((button) => button.setButtonText("Create new vault").onClick(() => void this.plugin.createVault()));
       }
-      if (!this.plugin.data.vaultKeys[this.selectedVaultId]) {
-        new Setting(containerEl).setName("Setup code").setDesc("On a connected device, open Syncdian and choose Get setup code.")
-          .addText((text) => {
-            text.inputEl.type = "password";
-            text.setPlaceholder("Paste setup code").onChange((value) => { this.recoveryCode = value.trim(); });
-          });
-      }
-      new Setting(containerEl).addButton((button) => button.setButtonText("Connect this device").setCta().onClick(() => {
-        void this.plugin.unlockVault(this.selectedVaultId, this.recoveryCode);
-      }));
+    }
+
+    if (plan) {
+      const percentage = Math.min(100, Math.round((plan.usedBytes / plan.storageQuotaBytes) * 100));
+      const setting = new Setting(containerEl).setName("Storage").setDesc(`${formatBytes(plan.usedBytes)} of ${formatBytes(plan.storageQuotaBytes)} used (${percentage}%).`);
+      const progress = setting.controlEl.createEl("progress");
+      progress.max = plan.storageQuotaBytes;
+      progress.value = plan.usedBytes;
+      progress.style.width = "100%";
+      new Setting(containerEl).setName("Need more storage?").setDesc("Email us with your account and current usage.")
+        .addButton((button) => button.setButtonText("Need more storage").onClick(() => {
+          const subject = encodeURIComponent("Syncdian storage upgrade");
+          const body = encodeURIComponent(`Hi Vayazka,\n\nI need more Syncdian storage.\nGitHub: @${this.plugin.data.user?.login ?? "unknown"}\nUsage: ${formatBytes(plan.usedBytes)} of ${formatBytes(plan.storageQuotaBytes)}\n`);
+          window.open(`mailto:helo@vayazka.com?subject=${subject}&body=${body}`, "_blank");
+        }));
     }
 
     new Setting(containerEl).setName("Automatic sync").addToggle((toggle) => toggle.setValue(this.plugin.data.autoSync).onChange((value) => {
       this.plugin.data.autoSync = value;
       void this.plugin.persist();
     }));
-
-    if (active || this.plugin.cloudVaults.length > 0) {
-      new Setting(containerEl).setName("Create a separate synced vault").setDesc("Keep the current vault separate and sync this local vault as a new one.")
-        .addButton((button) => button.setButtonText("Create separate vault").onClick(() => void this.plugin.createVault()));
-    }
   }
 }
 
-class SetupCodeModal extends Modal {
-  constructor(app: App, private readonly code: string) {
-    super(app);
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Connect another device" });
-    contentEl.createEl("p", { text: "Copy this setup code, then choose Connect this device in Syncdian on your other device. You can generate a new code here anytime." });
-    const codeEl = contentEl.createEl("pre", { text: this.code });
-    codeEl.style.userSelect = "all";
-    codeEl.style.wordBreak = "break-all";
-    new Setting(contentEl).addButton((button) => button.setButtonText("Copy code").onClick(() => {
-      void navigator.clipboard.writeText(this.code);
-      new Notice("Syncdian: setup code copied");
-    })).addButton((button) => button.setButtonText("Done").setCta().onClick(() => this.close()));
-  }
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

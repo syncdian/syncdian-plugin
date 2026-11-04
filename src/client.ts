@@ -1,5 +1,6 @@
 import { requestUrl, type RequestUrlResponse } from "obsidian";
-import type { CloudVault, DeviceChallenge, PluginData, RemoteFile, UserProfile, WrappedVaultKey } from "./types";
+import { bytesToBase64 } from "./crypto";
+import type { CloudVault, DeviceChallenge, PluginData, RemoteFile, StoragePlan, UserProfile } from "./types";
 
 const API_URL = "https://syncdian.vayazka.com";
 
@@ -26,21 +27,13 @@ export class SyncClient {
     await this.request("POST", "/auth/logout");
   }
 
-  async listVaults(): Promise<{ user: UserProfile; vaults: CloudVault[] }> {
+  async listVaults(): Promise<{ user: UserProfile; plan: StoragePlan; vaults: CloudVault[] }> {
     return this.expectJson(await this.request("GET", "/v1/vaults"));
   }
 
-  async createVault(name: string, wrapped: WrappedVaultKey): Promise<CloudVault> {
-    const response = await this.expectJson(await this.request("POST", "/v1/vaults", { name, ...wrapped }));
+  async createVault(name: string): Promise<CloudVault> {
+    const response = await this.expectJson(await this.request("POST", "/v1/vaults", { name }));
     return response.vault;
-  }
-
-  getVaultKey(vaultId: string): Promise<WrappedVaultKey & { vault: CloudVault }> {
-    return this.expectJson(this.request("GET", `/v1/vault/key?vaultId=${encodeURIComponent(vaultId)}`));
-  }
-
-  async updateVaultKey(vaultId: string, wrapped: WrappedVaultKey): Promise<void> {
-    await this.expectJson(this.request("PUT", `/v1/vault/key?vaultId=${encodeURIComponent(vaultId)}`, wrapped));
   }
 
   async manifest(): Promise<{ revision: number; files: RemoteFile[] }> {
@@ -57,17 +50,9 @@ export class SyncClient {
     return response.arrayBuffer;
   }
 
-  async upload(
-    id: string,
-    encryptedPath: string,
-    body: ArrayBuffer,
-    hash: string,
-    baseVersion: number,
-  ): Promise<{ file: RemoteFile; revision: number }> {
+  async upload(path: string, body: ArrayBuffer, baseVersion: number): Promise<{ file: RemoteFile; revision: number }> {
     const response = await this.request("PUT", "/v1/file", undefined, body, {
-      "X-File-Id": id,
-      "X-Encrypted-Path": encryptedPath,
-      "X-Content-Hash": hash,
+      "X-File-Path": bytesToBase64(new TextEncoder().encode(path)),
       "X-Base-Version": String(baseVersion),
       "Content-Type": "application/octet-stream",
     });
@@ -75,10 +60,9 @@ export class SyncClient {
     return this.expectJson(response);
   }
 
-  async remove(id: string, encryptedPath: string, baseVersion: number): Promise<{ file: RemoteFile; revision: number }> {
+  async remove(path: string, baseVersion: number): Promise<{ file: RemoteFile; revision: number }> {
     const response = await this.request("DELETE", "/v1/file", undefined, undefined, {
-      "X-File-Id": id,
-      "X-Encrypted-Path": encryptedPath,
+      "X-File-Path": bytesToBase64(new TextEncoder().encode(path)),
       "X-Base-Version": String(baseVersion),
     });
     if (response.status >= 400) this.throwResponse(response);

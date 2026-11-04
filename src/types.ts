@@ -8,13 +8,20 @@ export interface UserProfile {
 export interface CloudVault {
   id: string;
   name: string;
+  usedBytes: number;
   createdAt: number;
   updatedAt: number;
 }
 
+export interface StoragePlan {
+  maxVaults: number;
+  storageQuotaBytes: number;
+  usedBytes: number;
+}
+
 export interface RemoteFile {
   id: string;
-  encryptedPath: string;
+  path: string;
   hash: string;
   size: number;
   version: number;
@@ -25,7 +32,6 @@ export interface RemoteFile {
 }
 
 export interface SyncedFile extends RemoteFile {
-  path: string;
   plainHash: string;
 }
 
@@ -64,10 +70,3 @@ export interface DeviceChallenge {
   interval: number;
 }
 
-export interface WrappedVaultKey {
-  wrappedKey: string;
-  wrapSalt: string;
-  wrapNonce: string;
-  wrapIterations: number;
-  keyVersion: number;
-}
