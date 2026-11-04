@@ -2,7 +2,7 @@ import { requestUrl, type RequestUrlResponse } from "obsidian";
 import { bytesToBase64 } from "./crypto";
 import type { CloudVault, DeviceChallenge, PluginData, RemoteFile, StoragePlan, UserProfile } from "./types";
 
-const API_URL = "https://syncdian.vayazka.com";
+const API_URL = "https://api.syncdian.com";
 
 export class SyncError extends Error {
   constructor(message: string, public readonly status: number, public readonly payload: any) {
@@ -71,7 +71,7 @@ export class SyncClient {
 
   openWebSocket(onChange: (file: RemoteFile) => void, onOpen: () => void, onClose: () => void): WebSocket {
     const data = this.data();
-    const url = `wss://syncdian.vayazka.com/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
+    const url = `wss://api.syncdian.com/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
     const socket = new WebSocket(url, ["syncdian.v1", `auth.${data.sessionToken}`]);
     socket.onopen = onOpen;
     socket.onclose = onClose;

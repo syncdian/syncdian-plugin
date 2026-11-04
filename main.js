@@ -43,7 +43,7 @@ async function sha256(data) {
 }
 
 // src/client.ts
-var API_URL = "https://syncdian.vayazka.com";
+var API_URL = "https://api.syncdian.com";
 var SyncError = class extends Error {
   constructor(message, status, payload) {
     super(message);
@@ -103,7 +103,7 @@ var SyncClient = class {
   }
   openWebSocket(onChange, onOpen, onClose) {
     const data = this.data();
-    const url = `wss://syncdian.vayazka.com/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
+    const url = `wss://api.syncdian.com/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
     const socket = new WebSocket(url, ["syncdian.v1", `auth.${data.sessionToken}`]);
     socket.onopen = onOpen;
     socket.onclose = onClose;
