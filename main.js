@@ -27,7 +27,7 @@ var import_obsidian3 = require("obsidian");
 
 // src/client.ts
 var import_obsidian = require("obsidian");
-var API_URL = "https://obsidian.vayazka.com";
+var API_URL = "https://syncdian.vayazka.com";
 var SyncError = class extends Error {
   constructor(message, status, payload) {
     super(message);
@@ -96,7 +96,7 @@ var SyncClient = class {
   }
   openWebSocket(onChange, onOpen, onClose) {
     const data = this.data();
-    const url = `wss://obsidian.vayazka.com/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
+    const url = `wss://syncdian.vayazka.com/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
     const socket = new WebSocket(url, ["syncdian.v1", `auth.${data.sessionToken}`]);
     socket.onopen = onOpen;
     socket.onclose = onClose;

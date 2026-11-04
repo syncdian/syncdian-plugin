@@ -1,6 +1,6 @@
 {
-  "name": "syncdian",
-  "version": "0.3.1",
+  "name": "syncdian-plugin",
+  "version": "0.3.2",
   "private": true,
   "description": "End-to-end encrypted Obsidian sync plugin",
   "scripts": {
