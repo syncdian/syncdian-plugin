@@ -47,7 +47,12 @@ try {
 
   await client.manifest();
   assert.equal(new URL(requests[1].url).searchParams.get("vaultId"), vaultId);
-  console.log("Client URL tests passed: manifest and changes include vaultId.");
+
+  await client.download("a".repeat(64), "b".repeat(64));
+  const historicalUrl = new URL(requests[2].url);
+  assert.equal(historicalUrl.searchParams.get("hash"), "b".repeat(64));
+  assert.equal(historicalUrl.searchParams.get("vaultId"), vaultId);
+  console.log("Client URL tests passed: vault IDs and historical content hashes are preserved.");
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

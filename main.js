@@ -674,7 +674,7 @@ var SyncEngine = class {
       }
       return;
     }
-    const remoteData = await this.client.download(remote.id);
+    const remoteData = await this.client.download(remote.id, remote.hash);
     const remotePlainHash = await sha256(remoteData);
     if (localHash === remotePlainHash) {
       state.files[path] = { ...remote, path, plainHash: remotePlainHash };
