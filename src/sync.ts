@@ -1,7 +1,8 @@
-import { Notice, normalizePath, type App } from "obsidian";
+import { Notice, Platform, normalizePath, type App } from "obsidian";
 import { SyncClient, SyncError } from "./client";
 import { sha256 } from "./crypto";
 import { isTextPath, mergeText } from "./merge";
+import { androidSafePath } from "./paths";
 import type { PluginData, RemoteFile, SyncedFile, VaultSyncState } from "./types";
 
 interface EngineOptions {
@@ -197,8 +198,8 @@ export class SyncEngine {
       const state = this.options.state();
       const synced = state.files[path];
       try {
-        const result = await this.client.remove(path, synced?.version ?? 0);
-        state.files[path] = { ...result.file, path, plainHash: synced?.plainHash ?? "" };
+        const result = await this.client.remove(synced?.remotePath ?? path, synced?.version ?? 0);
+        state.files[path] = { ...result.file, path, remotePath: result.file.path, plainHash: synced?.plainHash ?? "" };
         state.lastRevision = Math.max(state.lastRevision, result.revision);
         this.pendingDeletes.delete(path);
         await this.options.persist();
@@ -251,15 +252,19 @@ export class SyncEngine {
   private async uploadData(path: string, data: ArrayBuffer, baseVersion: number): Promise<void> {
     const state = this.options.state();
     const plainHash = await sha256(data);
-    const result = await this.client.upload(path, data, baseVersion);
-    state.files[path] = { ...result.file, plainHash };
+    const remotePath = state.files[path]?.remotePath ?? path;
+    const result = await this.client.upload(remotePath, data, baseVersion);
+    state.files[path] = { ...result.file, path, remotePath: result.file.path, plainHash };
     state.lastRevision = Math.max(state.lastRevision, result.revision);
   }
 
   private async applyRemote(remote: RemoteFile): Promise<void> {
-    const path = this.validRemotePath(remote.path);
+    const remotePath = this.validRemotePath(remote.path);
     const state = this.options.state();
-    const synced = state.files[path];
+    const path = this.localPathFor(remotePath, remote.id);
+    const previousEntry = Object.entries(state.files).find(([, file]) => (file.remotePath ?? file.path) === remotePath);
+    const synced = state.files[path] ?? previousEntry?.[1];
+    if (previousEntry && previousEntry[0] !== path) delete state.files[previousEntry[0]];
     if (synced?.revision === remote.revision && synced.hash === remote.hash) return;
 
     const adapter = this.options.app.vault.adapter;
@@ -273,7 +278,7 @@ export class SyncEngine {
         await this.uploadData(path, localData, remote.version);
       } else {
         if (exists) await this.removeLocal(path);
-        state.files[path] = { ...remote, path, plainHash: synced?.plainHash ?? "" };
+        state.files[path] = { ...remote, path, remotePath, plainHash: synced?.plainHash ?? "" };
       }
       return;
     }
@@ -281,13 +286,13 @@ export class SyncEngine {
     const remoteData = await this.client.download(remote.id, remote.hash);
     const remotePlainHash = await sha256(remoteData);
     if (localHash === remotePlainHash) {
-      state.files[path] = { ...remote, path, plainHash: remotePlainHash };
+      state.files[path] = { ...remote, path, remotePath, plainHash: remotePlainHash };
       return;
     }
 
     if (!localData || (synced && localHash === synced.plainHash)) {
       await this.writeLocal(path, remoteData);
-      state.files[path] = { ...remote, path, plainHash: remotePlainHash };
+      state.files[path] = { ...remote, path, remotePath, plainHash: remotePlainHash };
       return;
     }
 
@@ -300,7 +305,7 @@ export class SyncEngine {
       const mergedHash = await sha256(merged.data);
       if (mergedHash === remotePlainHash) {
         await this.writeLocal(path, remoteData);
-        state.files[path] = { ...remote, path, plainHash: remotePlainHash };
+        state.files[path] = { ...remote, path, remotePath, plainHash: remotePlainHash };
       } else {
         await this.writeLocal(path, merged.data);
         await this.uploadData(path, merged.data, remote.version);
@@ -309,7 +314,7 @@ export class SyncEngine {
     } else {
       await this.createConflictCopy(path, localData);
       await this.writeLocal(path, remoteData);
-      state.files[path] = { ...remote, path, plainHash: remotePlainHash };
+      state.files[path] = { ...remote, path, remotePath, plainHash: remotePlainHash };
     }
   }
 
@@ -395,6 +400,27 @@ export class SyncEngine {
     if (path.startsWith(".obsidian/plugins/syncdian/")) return false;
     const relative = path.slice(".obsidian/".length);
     return CONFIG_FILES.has(relative) || relative.startsWith("plugins/") || relative.startsWith("themes/") || relative.startsWith("snippets/");
+  }
+
+  private localPathFor(remotePath: string, id: string): string {
+    if (!Platform.isAndroidApp) return remotePath;
+    const state = this.options.state();
+    const existing = Object.values(state.files).find((file) => (file.remotePath ?? file.path) === remotePath);
+    if (existing && androidSafePath(existing.path) === existing.path) return existing.path;
+
+    let candidate = androidSafePath(remotePath);
+    const collision = Object.values(state.files).some((file) =>
+      file.path === candidate && (file.remotePath ?? file.path) !== remotePath
+    );
+    if (collision) {
+      const slash = candidate.lastIndexOf("/");
+      const dot = candidate.lastIndexOf(".");
+      const hasExtension = dot > slash;
+      const base = hasExtension ? candidate.slice(0, dot) : candidate;
+      const extension = hasExtension ? candidate.slice(dot) : "";
+      candidate = `${base}.syncdian-${id.slice(0, 8)}${extension}`;
+    }
+    return candidate;
   }
 
   private validRemotePath(path: string): string {

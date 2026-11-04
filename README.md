@@ -44,6 +44,7 @@ Open **Settings → Syncdian** to see current usage. Choose **Need more storage*
 - Automatic three-way merging for text files
 - Conflict markers for overlapping text edits and conflict copies for binary files
 - Realtime notifications and offline catch-up
+- Automatic local aliases for filenames that are invalid on Android
 - Notes, attachments, settings, themes, snippets, and other plugin synchronization
 
 Workspace layouts, caches, `.trash/`, login sessions, and device IDs remain device-local. Syncdian itself is updated through BRAT rather than synchronized.

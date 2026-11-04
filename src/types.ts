@@ -32,6 +32,7 @@ export interface RemoteFile {
 }
 
 export interface SyncedFile extends RemoteFile {
+  remotePath: string;
   plainHash: string;
 }
 
