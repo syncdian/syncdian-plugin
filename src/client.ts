@@ -2,7 +2,7 @@ import { requestUrl, type RequestUrlResponse } from "obsidian";
 import { bytesToBase64 } from "./crypto";
 import type { CloudVault, DeviceChallenge, PluginData, RemoteFile, StoragePlan, UserProfile } from "./types";
 
-const API_URL = "https://api.syncdian.com";
+const API_URLS = ["https://api.syncdian.com", "https://syncdian.vayazka.com"];
 
 export class SyncError extends Error {
   constructor(message: string, public readonly status: number, public readonly payload: any) {
@@ -11,6 +11,8 @@ export class SyncError extends Error {
 }
 
 export class SyncClient {
+  private activeApiUrl = API_URLS[0];
+
   constructor(private readonly data: () => PluginData) {}
 
   startLogin(): Promise<DeviceChallenge> {
@@ -71,7 +73,7 @@ export class SyncClient {
 
   openWebSocket(onChange: (file: RemoteFile) => void, onOpen: () => void, onClose: () => void): WebSocket {
     const data = this.data();
-    const url = `wss://api.syncdian.com/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
+    const url = `${this.activeApiUrl.replace(/^https:/, "wss:")}/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
     const socket = new WebSocket(url, ["syncdian.v1", `auth.${data.sessionToken}`]);
     socket.onopen = onOpen;
     socket.onclose = onClose;
@@ -85,11 +87,21 @@ export class SyncClient {
     return socket;
   }
 
-  private publicRequest(method: "POST", path: string, body?: unknown): Promise<RequestUrlResponse> {
-    return requestUrl({ url: `${API_URL}${path}`, method, body: body ? JSON.stringify(body) : undefined, contentType: "application/json", throw: false });
+  private async publicRequest(method: "POST", path: string, body?: unknown): Promise<RequestUrlResponse> {
+    let lastError: unknown;
+    for (const baseUrl of this.apiCandidates()) {
+      try {
+        const response = await requestUrl({ url: `${baseUrl}${path}`, method, body: body ? JSON.stringify(body) : undefined, contentType: "application/json", throw: false });
+        this.activeApiUrl = baseUrl;
+        return response;
+      } catch (caught) {
+        lastError = caught;
+      }
+    }
+    throw lastError;
   }
 
-  private request(
+  private async request(
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     jsonBody?: unknown,
@@ -100,18 +112,32 @@ export class SyncClient {
     const separator = path.includes("?") ? "&" : "?";
     const needsVault = path.startsWith("/v1/file") || path.startsWith("/v1/manifest") || path.startsWith("/v1/changes");
     const vaultQuery = needsVault ? `${separator}vaultId=${encodeURIComponent(data.activeVaultId)}` : "";
-    return requestUrl({
-      url: `${API_URL}${path}${vaultQuery}`,
-      method,
-      body: body ?? (jsonBody ? JSON.stringify(jsonBody) : undefined),
-      contentType: headers["Content-Type"] ?? (jsonBody ? "application/json" : undefined),
-      headers: {
-        Authorization: `Bearer ${data.sessionToken}`,
-        "X-Device-Id": data.deviceId,
-        ...headers,
-      },
-      throw: false,
-    });
+    let lastError: unknown;
+    for (const baseUrl of this.apiCandidates()) {
+      try {
+        const response = await requestUrl({
+          url: `${baseUrl}${path}${vaultQuery}`,
+          method,
+          body: body ?? (jsonBody ? JSON.stringify(jsonBody) : undefined),
+          contentType: headers["Content-Type"] ?? (jsonBody ? "application/json" : undefined),
+          headers: {
+            Authorization: `Bearer ${data.sessionToken}`,
+            "X-Device-Id": data.deviceId,
+            ...headers,
+          },
+          throw: false,
+        });
+        this.activeApiUrl = baseUrl;
+        return response;
+      } catch (caught) {
+        lastError = caught;
+      }
+    }
+    throw lastError;
+  }
+
+  private apiCandidates(): string[] {
+    return [this.activeApiUrl, ...API_URLS.filter((url) => url !== this.activeApiUrl)];
   }
 
   private async expectJson(response: RequestUrlResponse | Promise<RequestUrlResponse>): Promise<any> {
