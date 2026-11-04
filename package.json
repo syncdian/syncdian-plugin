@@ -1,13 +1,14 @@
 {
   "name": "syncdian",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "End-to-end encrypted Obsidian sync plugin",
   "scripts": {
     "build": "node esbuild.config.mjs",
     "typecheck": "tsc --noEmit",
     "package": "npm run build && node package.mjs",
-    "test:merge": "node scripts/test-merge.mjs"
+    "test:merge": "node scripts/test-merge.mjs",
+    "test:client": "node scripts/test-client.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

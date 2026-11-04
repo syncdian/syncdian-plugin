@@ -20,6 +20,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:merge
+      - run: npm run test:client
       - run: npm run build
       - name: Create GitHub Release with Obsidian assets
         env:

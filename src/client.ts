@@ -114,7 +114,7 @@ export class SyncClient {
   ): Promise<RequestUrlResponse> {
     const data = this.data();
     const separator = path.includes("?") ? "&" : "?";
-    const needsVault = path.startsWith("/v1/file") || path === "/v1/manifest" || path === "/v1/changes";
+    const needsVault = path.startsWith("/v1/file") || path.startsWith("/v1/manifest") || path.startsWith("/v1/changes");
     const vaultQuery = needsVault ? `${separator}vaultId=${encodeURIComponent(data.activeVaultId)}` : "";
     return requestUrl({
       url: `${API_URL}${path}${vaultQuery}`,
