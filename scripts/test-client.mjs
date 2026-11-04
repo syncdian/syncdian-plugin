@@ -53,14 +53,7 @@ try {
   assert.equal(historicalUrl.searchParams.get("hash"), "b".repeat(64));
   assert.equal(historicalUrl.searchParams.get("vaultId"), vaultId);
 
-  globalThis.__syncdianRequest = async (options) => {
-    requests.push(options);
-    if (requests.length === 4) throw new Error("getaddrinfo ENOTFOUND api.syncdian.com");
-    return { status: 200, json: { revision: 0, changes: [], files: [], hasMore: false }, headers: {}, arrayBuffer: new ArrayBuffer(0), text: "" };
-  };
-  await client.manifest();
-  assert.ok(requests[4].url.startsWith("https://syncdian.maslulsaefulloh.workers.dev/"));
-  console.log("Client URL tests passed: vault IDs, historical hashes, and DNS fallback.");
+  console.log("Client URL tests passed: vault IDs and historical hashes use the primary API.");
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

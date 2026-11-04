@@ -43,7 +43,7 @@ async function sha256(data) {
 }
 
 // src/client.ts
-var API_URLS = ["https://api.syncdian.com", "https://syncdian.maslulsaefulloh.workers.dev"];
+var API_URL = "https://api.syncdian.com";
 var SyncError = class extends Error {
   constructor(message, status, payload) {
     super(message);
@@ -54,7 +54,6 @@ var SyncError = class extends Error {
 var SyncClient = class {
   constructor(data) {
     this.data = data;
-    this.activeApiUrl = API_URLS[0];
   }
   startLogin() {
     return this.expectJson(this.publicRequest("POST", "/auth/device/start"));
@@ -104,7 +103,7 @@ var SyncClient = class {
   }
   openWebSocket(onChange, onOpen, onClose) {
     const data = this.data();
-    const url = `${this.activeApiUrl.replace(/^https:/, "wss:")}/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
+    const url = `${API_URL.replace(/^https:/, "wss:")}/v1/ws?vaultId=${encodeURIComponent(data.activeVaultId)}`;
     const socket = new WebSocket(url, ["syncdian.v1", `auth.${data.sessionToken}`]);
     socket.onopen = onOpen;
     socket.onclose = onClose;
@@ -118,49 +117,26 @@ var SyncClient = class {
     };
     return socket;
   }
-  async publicRequest(method, path, body) {
-    let lastError;
-    for (const baseUrl of this.apiCandidates()) {
-      try {
-        const response = await (0, import_obsidian.requestUrl)({ url: `${baseUrl}${path}`, method, body: body ? JSON.stringify(body) : void 0, contentType: "application/json", throw: false });
-        this.activeApiUrl = baseUrl;
-        return response;
-      } catch (caught) {
-        lastError = caught;
-      }
-    }
-    throw lastError;
+  publicRequest(method, path, body) {
+    return (0, import_obsidian.requestUrl)({ url: `${API_URL}${path}`, method, body: body ? JSON.stringify(body) : void 0, contentType: "application/json", throw: false });
   }
   async request(method, path, jsonBody, body, headers = {}) {
     const data = this.data();
     const separator = path.includes("?") ? "&" : "?";
     const needsVault = path.startsWith("/v1/file") || path.startsWith("/v1/manifest") || path.startsWith("/v1/changes");
     const vaultQuery = needsVault ? `${separator}vaultId=${encodeURIComponent(data.activeVaultId)}` : "";
-    let lastError;
-    for (const baseUrl of this.apiCandidates()) {
-      try {
-        const response = await (0, import_obsidian.requestUrl)({
-          url: `${baseUrl}${path}${vaultQuery}`,
-          method,
-          body: body ?? (jsonBody ? JSON.stringify(jsonBody) : void 0),
-          contentType: headers["Content-Type"] ?? (jsonBody ? "application/json" : void 0),
-          headers: {
-            Authorization: `Bearer ${data.sessionToken}`,
-            "X-Device-Id": data.deviceId,
-            ...headers
-          },
-          throw: false
-        });
-        this.activeApiUrl = baseUrl;
-        return response;
-      } catch (caught) {
-        lastError = caught;
-      }
-    }
-    throw lastError;
-  }
-  apiCandidates() {
-    return [this.activeApiUrl, ...API_URLS.filter((url) => url !== this.activeApiUrl)];
+    return (0, import_obsidian.requestUrl)({
+      url: `${API_URL}${path}${vaultQuery}`,
+      method,
+      body: body ?? (jsonBody ? JSON.stringify(jsonBody) : void 0),
+      contentType: headers["Content-Type"] ?? (jsonBody ? "application/json" : void 0),
+      headers: {
+        Authorization: `Bearer ${data.sessionToken}`,
+        "X-Device-Id": data.deviceId,
+        ...headers
+      },
+      throw: false
+    });
   }
   async expectJson(response) {
     const resolved = await response;
